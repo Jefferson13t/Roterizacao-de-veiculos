@@ -238,14 +238,21 @@ def draw_graph(nos: list[tuple[int, int]], clientes: list[int], caminho_por_veic
     ax.set_ylim(0, ALTURA)
     ax.set_aspect("equal")
 
+    output_img_path = 'outputs/solution.png'
+
+    plt.savefig(
+        output_img_path,
+        dpi=300,
+        bbox_inches="tight"
+    )
 
     plt.show()
 
 
 def main() -> None:
 
-    quantidade_veiculos = 2
-    quantidade_clientes = 8
+    quantidade_veiculos = 3
+    quantidade_clientes = 15
 
     K = list(range(quantidade_veiculos))
 
