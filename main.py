@@ -1,4 +1,6 @@
 import pyomo.environ as pyo
+from pyomo.opt import SolverStatus, TerminationCondition
+
 import matplotlib.pyplot as plt
 from pyomo.opt import SolverFactory
 from matplotlib.patches import Circle
@@ -6,9 +8,8 @@ import random
 
 
 def solve(
-        N: list[int],
         C: list[float],
-        d: dict[int, float],
+        d: list[float],
         c: dict[tuple[int, int], float],
         K: list[int],
         Q: float, 
@@ -31,12 +32,10 @@ def solve(
     # Conjunto de arcos
     E = [
         (i, j)
-        for i in N
-        for j in N
+        for i in range(len(C))
+        for j in range(len(C))
         if i != j
     ]
-
-
 
     model.u = pyo.Var(K, C, within=pyo.NonNegativeReals)
     model.x = pyo.Var(E, K, within=pyo.Binary)
@@ -57,85 +56,92 @@ def solve(
 
     model.c = pyo.ConstraintList()
 
+    # Restrição da formulação Miller-Tucker-Zemlin Formulation
     for k in K:
-        for i in N:
-            for j in N:
-                if i not in C:
-                    continue
-                if j not in C:
-                    continue
+        n = len(C)
+
+        for i in range(1, len(C)):
+            for j in range(1, len(C)):
                 if j == i:
                     continue
 
                 model.c.add(
-                    model.u[k, j] - model.u[k, i] >= d[j] - Q * (1 - model.x[i, j, k])
+                    model.u[k, j] - model.u[k, i] >= d[i] - Q * (1 - model.x[i, j, k])
                 )
 
     for k in K:
-        for i in N:
-            if i not in C:
-                continue
-   
-            model.c.add(model.u[k, i] >= d[i])
+        for i in range(1, len(C)):
+ 
+            model.c.add(d[i] <= model.u[k, i])
             model.c.add(model.u[k, i] <= Q)
 
-
-
-    for i in C:
+    # Cada cliente é atendido por somente um veículo
+    for i in range(1, len(C)):
         model.c.add(
             pyo.quicksum(
                 model.x[i, j, k]
-                for j in N
+                for j in range(len(C))
                 if j != i
                 for k in K
             ) == 1
         )
 
-    # for k in K:
-    #     model.c.add(
-    #         pyo.quicksum(
-    #             d[i] * model.x[i, j, k]
-    #             for i in C
-    #             for j in N
-    #             if j != i
-    #         ) <= Q
-    #     )
+    # Os clientes atendidos por um veículo devem respeitar a capacidade
+    for k in K:
+        model.c.add(
+            pyo.quicksum(
+                d[i] * model.x[i, j, k]
+                for i in range(len(C))
+                for j in range(len(C))
+                if j != i
+            ) <= Q
+        )
 
+    # As próximas 3 restrições são restrições de fluxo em rede
+
+    # Todos os veículos devem sair do depósito. (Primeiro vertice)
     for k in K:
         model.c.add(
             pyo.quicksum(
                 model.x[0, j, k]
-                for j in C
+                for j in range(len(C))
                 if j != 0
-            ) <= 1
+            ) == 1
         )
 
-
+    # Somatorio dos veículos entrando em um vertice deve ser igual ao somatorio dos veículos saindo. (Não tem acumulo)
     for k in K:
-        for h in C:
+        for h in range(len(C)):
             model.c.add(
                 pyo.quicksum(
                     model.x[i, h, k]
-                    for i in N
+                    for i in range(len(C))
                     if h != i
                 ) - pyo.quicksum(
                     model.x[h, j, k]
-                    for j in N
+                    for j in range(len(C))
                     if j != h
                 ) == 0
             )
 
+    # Todos os veículos devem terminar no depósito
     for k in K:
         model.c.add(
             pyo.quicksum(
                 model.x[i, 0, k]
-                for i in C
+                for i in range(len(C))
                 if i != 0
             ) == 1
         )
 
     # Resolver
-    result = opt.solve(model, tee=False)
+    results = opt.solve(model, tee=False)
+
+    # model.load(results)
+
+    # if(results.solver.termination_condition == TerminationCondition.noSolution):
+    #     print("Infeasible")
+    #     print(results)
 
     caminho_por_carro = {}
 
@@ -181,7 +187,7 @@ def draw_graph(nos: list[tuple[int, int]], clientes: list[int], caminho_por_veic
         ax.add_patch(no)
 
 
-    for arestas in caminho_por_veiculo:
+    for i, arestas in enumerate(caminho_por_veiculo):
 
         cores = [
             "#FF0000",  # vermelho
@@ -206,7 +212,9 @@ def draw_graph(nos: list[tuple[int, int]], clientes: list[int], caminho_por_veic
             "#000000",  # preto
         ]
 
-        for i, aresta in enumerate(arestas):
+        path_color = cores[i]
+
+        for aresta in arestas:
 
             no_inicio = aresta[0]
             no_fim = aresta[1]
@@ -216,7 +224,7 @@ def draw_graph(nos: list[tuple[int, int]], clientes: list[int], caminho_por_veic
                 xy=no_inicio,  # Ponto onde fica a ponta da seta
                 xytext=no_fim,  # Ponto onde começa a cauda (e fica o texto)
                 arrowprops=dict(
-                    facecolor=cores[i],
+                    facecolor=path_color,
                     edgecolor="none",
                     shrink=0.05,
                     width=2,
@@ -236,34 +244,26 @@ def draw_graph(nos: list[tuple[int, int]], clientes: list[int], caminho_por_veic
 
 def main() -> None:
 
-    quantidade_nos = 6
     quantidade_veiculos = 2
+    quantidade_clientes = 8
 
-    # Nós: 0 = depósito
-    #      1, 2, 3, 4, 5 = clientes
-    N = list(range(quantidade_nos))
     K = list(range(quantidade_veiculos))
 
-    C = [1.0, 2, 3, 4, 5]
+    # Clientes
+    C = [i for i in range(quantidade_clientes)]
 
     # Demanda dos clientes
-    d = {
-        1: 4,
-        2: 3.0,
-        3: 5,
-        4: 2,
-        5: 4,
-    }
+    d = [0.0] + [round(random.uniform(1.0, 5.0), 1) for _ in range(quantidade_clientes)]
 
     # Capacidade dos veículos
-    Q = 10
+    Q = 20
 
     posicao = [
         (random.randint(0, 100), random.randint(0, 50))
-        for i in N
+        for _ in range(quantidade_clientes)
     ]
 
-    def calc_dist(posicao_i: tuple[int, int], posicao_j: tuple[int, int]) -> float:
+    def calc_dist(posicao_i: tuple[float, float], posicao_j: tuple[float, float]) -> float:
         x_i = posicao_i[0]
         y_i = posicao_i[1]
 
@@ -275,12 +275,11 @@ def main() -> None:
 
     c = {
         (i, j): calc_dist(posicao[i], posicao[j])
-        for i in N
-        for j in N
+        for i in range(len(C))
+        for j in range(len(C))
     }
 
-
-    resultado = solve(N, C, d, c, K, Q)
+    resultado = solve(C, d, c, K, Q)
 
 
     caminho_por_veiculo = []
